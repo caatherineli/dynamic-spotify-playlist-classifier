@@ -1,0 +1,474 @@
+---
+title: "Building Dynamic Spotify Playlists through Genre Classification"
+subtitle: "Leveraging Machine Learning and Spotify Data to Classify Tracks into Their Respective Genres Based on Audio Features"
+author: "Catherine Li"
+date: "UCSB Spring 2023"
+output:
+  html_document:
+    toc: true 
+    toc_depth: 4
+    toc_float: true 
+    theme: united
+    highlight: tango 
+    css: my.css 
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      warning = FALSE)
+```
+# **Introduction** 
+
+
+## Inspiration and Motive
+
+
+## Data Description
+
+
+## Project Roadmap
+
+
+# **Exploring Our Data**
+Before any modeling and analysis can be done, we first need to load the necessary packages to do so. In addition, because this dataset contains tens of thousands of songs and is from an external source, there are some missing or unnecessary variables that must be cleaned or rendered. Let's do that here. 
+
+## Loading Packages and Exploring Data
+First, let's load in all of our packages and the raw Netflix data.
+```{r }
+# loading the necessary packages 
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library(dplyr)
+library(kknn)
+library(glmnet)
+library(corrplot)
+library(corrr)
+library(vip)
+library(janitor)
+library(naniar)
+library(discrim)
+
+# loading the raw Spotify data 
+og_spotify <- read.csv("genres_v2.csv")
+
+# cleaning predictor names
+og_spotify <- clean_names(og_spotify)
+
+# view the first few rows of the data
+head(og_spotify)
+```
+Now that we have a better idea of what variables we have to work with, let's narrow it down to make it easier to use!
+
+## Variable Selection
+Let's take a closer look at our data to see what kind of variables we're working with. 
+```{r }
+# view the number of columns and rows of our data 
+dim(og_spotify)
+```
+As we can see, we have 42305 rows and 22 columns, which means that we have 42305 different Spotify tracks and 22 variables. That's a lot of songs! However, this is good for our model, because it allows us to create a highly accurate model that can cater to the diverse music preferences of Spotify listeners. With such a vast collection of songs, the model is exposed to a rich tapestry of musical genres, artist styles, and listener tastes, allowing it to discern intricate patterns and relationships within the data.
+
+Now, because we are trying to classify different songs into genres, let's see how many values of the variable `genre` we have at our disposal. 
+```{r }
+# seeing how many unique genres we have
+og_spotify %>% 
+  distinct(genre) %>%
+  count
+```
+As a result, we have 42305 songs to categorize into 15 different genres of music. That's a lot! We will group these together later on.
+
+Now, before we can begin to clean up our data, let's first take a look at our data and variables to see if there's anything that we need to render or delete. 
+```{r }
+# plotting our missing values 
+gg_miss_var(og_spotify)
+
+# number of missing values in our data set 
+sum(is.na(og_spotify))
+```
+As we can see from plotting our missing values and finding the number of missing values in our data set, it can be seen that all of the missing values in our data set is from the variable `unnamed_0`. This might have been added to the dataset on accident, because all of the values for the variable are blank. Therefore, we should entirely remove this variable so it doesn't affect the rest of our data later on. 
+
+## Tidying Our Data
+Let's now finalize which variables from the data set we want to include and which ones we do not. Of course, we will drop the variables `unnamed_0` and `title`, which has no data in it and was probably created unintentionally. Some other predictors that I will drop are `analysis_url`, `track_href`, `uri`, and `id`. This is because while each of these variables uniquely identify each track in a different form, there are too many. Instead, we will stick with `title` to identify each track, as it is also the easiest to identify and understand. In addition, I will also drop the variable `popularity`, because while it can be interesting, it does not provide any insight into the audio features of the different tracks. Lastly, we will drop the variable `song_name` as it has the same output value (`audio_features`) for every observation, which is not useful for our model's goal. 
+```{r }
+# select variables that we will use in our model 
+og_spotify <- og_spotify %>% 
+  select(c("acousticness", "danceability", "duration_ms", "energy", "genre", "instrumentalness", "key", "liveness", "loudness", "mode", "song_name", "speechiness", "tempo", "time_signature", "valence"))
+```
+
+Because we are working with a multi-class classification model (with 15 unique values of `genre`) with over 42000 observations, we have to cut down on the number of observations in our dataset. When we later begin to build our models, the dataset is too large and takes too much computing power. These models will either take hours to run, or the system will reach its limit and cannot run at all. Let's view how many observations we have within each genre.
+```{r }
+# view the number of observations in each genre
+genre_counts <- table(og_spotify$genre)
+genre_counts
+```
+
+Looking at this output, we will randomly cut the data of each existing genre to a quarter of its original number of observations, except for "Pop", and store it into a new dataset. We are not cutting all of the existing genres to a quarter, because most genres have a significantly larger number of observations than "Pop". For example, when we view the number of observations in each genre, "Underground Rap," the genre with the largest number of observations (5875), is over 10 times larger than our smallest genre, "Pop" (461). 
+
+By preserving the observations for "Pop," we ensure that we have a sufficient number of data points for this genre, which allows for more accurate conclusions specific to "Pop." Since our goal is to identify patterns within each subgenre and analyze the relationships between audio features and each genre, the proportion of observations among genres is not as crucial as the quality and representativeness of the data for each subgenre.
+```{r }
+# setting the seed for reproducibility (we will consistently use this value when we later build our models)
+set.seed(3435)
+
+# create a new empty data frame to store the reduced dataset
+reduced_dataset <- data.frame()
+
+# iterate over each genre and cut all the observations in half, except for "Pop"
+for (genre in unique(og_spotify$genre)) {
+  # exclude "Pop" genre from cutting in half
+  if (genre != "Pop") {
+    # subset the data for the current genre
+    genre_data <- og_spotify[og_spotify$genre == genre, ]
+    
+    # determine the number of rows to keep
+    num_rows <- nrow(genre_data) %/% 4
+    
+    # randomly sample half of the data for the current genre
+    reduced_genre <- genre_data[sample(nrow(genre_data), num_rows), ]
+    
+    # append the reduced genre data to the overall reduced dataset
+    reduced_dataset <- rbind(reduced_dataset, reduced_genre)
+  } else {
+    # include all observations for "Pop" genre without cutting in half
+    reduced_dataset <- rbind(reduced_dataset, og_spotify[og_spotify$genre == genre, ])
+  }
+}
+
+# View the number of observations in each genre in the reduced dataset
+genre_counts_reduced <- table(reduced_dataset$genre)
+genre_counts_reduced
+```
+
+Success! Now let's store this new data into a new csv file, which we will now be using for the rest of this project.
+```{r }
+# save the reduced dataset to a CSV file
+write.csv(reduced_dataset, file = "reduced_dataset.csv", row.names = FALSE)
+
+# store into a new variable
+spotify <- read.csv("reduced_dataset.csv")
+
+# view dimensions of new variable
+dim(spotify)
+```
+
+We now have 10917 observations of 16 variables, which is a lot easier for us to work with! While this is half of the number of observations compared to our original dataset, this will allow our models to actually run.
+
+Given the presence of 15 unique values in the genre variable, it is necessary to categorize them into two distinct groups: "Hip-Hop/Rap" and "Electronic/Dance." This classification allows for a reduction in the number of categories, simplifying the overall analysis and facilitating the creation of binary classification models. It is important to note that when constructing playlists, individuals often consider not only the genre of the tracks but also the specific "vibes" or atmosphere they convey. Therefore, the creation of a modified predictor variable, `music_category`, based on the genre variable becomes imperative.
+
+Furthermore, to facilitate the analysis, this newly created response variable, `music_category`, will be converted into a factor, enabling the application of appropriate statistical techniques for classification purposes. This transformation enhances the interpretability of the results and ensures compatibility with classification algorithms.
+```{r }
+# group together different genres and reassign with new names 
+spotify <- spotify %>%
+  mutate(music_category = case_when(
+    genre %in% c("Dark Trap", "Underground Rap", "Rap", "Hiphop", "trap", "Trap Metal") ~ "Hip-Hop/Rap",
+    genre %in% c("dnb", "Emo", "hardstyle", "Pop", "psytrance", "RnB", 
+                 "techhouse", "techno", "trance") ~ "Electronic/Dance"
+  ))
+
+# check that the genres have been regrouped 
+genres_grouped <- unique(spotify$music_category)
+genres_grouped # success!
+
+# convert genre into a factor 
+spotify$category <- factor(spotify$music_category) 
+
+# view the number of observations in each new category
+genres_count <- table(spotify$music_category)
+genres_count
+```
+
+As we can see, we now have a more even number of observations for our response variable: "Electronic/Dance" with 5851 observations and "Hip-Hop/Rap" with 5066 observations. 
+
+## Describing Our Predictors
+We've finally cleaned our data set and selected only the variables that we need. Now, we can gain a better understanding of what each predictor represents. Here they are below: 
+
+* `acousticness`: a confidence measure from 0.0 to 1.0 of whether the track is acoustic (1.0 represents high confidence that the track is acoustic)
+
+* `danceability`: describes how suitable a track is for dancing based on a combination of musical elements including tempo, rhythm stability, beat strength, and overall regularity (0.0 is least danceable and 1.0 is most danceable)
+
+* `duration_ms`: the track length in milliseconds 
+
+* `energy`: a measure from 0.0 to 1.0 that represents a perceptual measure of intensity and activity. Typically, energetic tracks feel fast, loud, and noisy (e.g. death metal has high energy, while a Bach prelude scores low on the scale)
+
+* `music_category`: our newly created responsive variable that categorizes which category each track belongs in. There are two musical categories: Hip-Hop/Rap and Electronic/Dance 
+
+* `instrumentalness`: predicts whether a track contains no vocals. "Ooh" and "aah" sounds are treated as instrumental in this context, while rap or spoken word tracks are "vocal". The closer the instrumentalness value is to 1.0, the greater likelihood the track contains no vocal content
+
+* `key`: the key the track is in. Integers map to pitches using standard Pitch Class notation (e.g. 0 = C, 1 = C♯/D♭, 2 = D, and so on. If no key was detected, the value is -1)
+
+* `liveness`: detects the presence of an audience in the recording. Higher liveness values mean an increased probability that the track was performed live, while a value above 0.8 represents a strong likelihood that the track is live
+
+* `loudness`: the overall loudness of a track in decibels (dB)
+
+* `mode`: the modality of a track (1 = Major, 0 = Minor)
+
+* `song_name`: the song name of each track
+
+* `speechiness`: detects the presence of spoken words in a track. The more exclusively speech-like the recording (e.g. talk show, audio book, poetry), the closer to 1.0 the attribute value. Values above 0.66 describe tracks that are probably made entirely of spoken words. Values between 0.33 and 0.66 describe tracks that may contain both music and speech, either in sections or layered, including such cases as rap music. Values below 0.33 most likely represent music and other non-speech-like tracks
+
+* `tempo`: the overall estimated tempo of a track in beats per minute (BPM)
+
+* `time_signature`: a notational convention to specify how many beats are in each bar (or measure). The time signature ranges from 3 to 7 indicating time signatures of 3/4, to 7/4
+
+* `valence`: a measure from 0.0 to 1.0 describing the musical positiveness conveyed by a track. Tracks with high valence sound more positive (e.g. happy, cheerful, euphoric), while tracks with low valence sound more negative (e.g. sad, depressed, angry)
+
+## Visual EDA
+We will now visualize the relationships between different variables to gain a better understanding how they affect both each other and themselves. 
+
+### Genre Distribution
+Before we start comparing the relationships between different variables, let's first take a look at the distribution of our predictor variable, `genre`, which has 18 different genres. 
+```{r }
+# creating a bar plot of the 15 different genres of music 
+spotify %>% 
+  ggplot(aes(x = genres, fill = music_category)) + 
+  geom_bar() + 
+  labs(x = "Musical Category", y = "# of Tracks", title = "Distribution of the Number of Tracks Under Each Musical Category")
+```
+
+As we can see, the category "Electronic/Dance" has more tracks out of the two musical categories, with almost 6000 tracks. "Hip-Hop/Rap" only differs slightly, with a little over 5000 tracks. As we can see, the spread of tracks that fall under each category are pretty evenly distributed, so when we later test our data, we will have enough data to train our model for each category. 
+
+### Correlation Plot
+Let's now create a correlation plot to see the relationship between our numeric variables. I am not including the `key` variable because while it does contain numerical values, it does not actually hold any value when creating a correlation plot, because it represents categorical values. 
+```{r }
+# correlation plot 
+spotify %>% 
+  select(where(is.numeric), -key) %>% 
+  cor() %>%
+  corrplot(method = "circle", addCoef.col = 1, number.cex = 0.5)
+```
+
+A lot of these variables do not have much correlation with each other. In fact, most of these variables have little to no correlation with one another. This would mean that most of the variables in this dataset are relatively independent. However, the relationship that stands out most to me are between `instrumentalness` and `duration_ms` (0.6). This implies that tracks with higher instrumentalness tend to have longer durations. Similarily, another relationship that stands out to me are `loudness` and `energy` (0.6). This suggests that tracks with a higher loudness have higher energy levels, which makes sense. Both of these relationships have moderate positive correlation. 
+
+Now, we will create bar plots for many predictors relating to audio features to analyze their relationship with our response variable, `genres`. 
+
+### Danceability
+```{r }
+spotify %>%
+  dplyr::select(danceability, music_category) %>%
+  dplyr::mutate(danceability_group = cut(danceability, breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = danceability_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Danceability", y = "Count", title = "Distribution of Danceability Across Musical Categories") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+From this bar graph, we can see that a majority of the Spotify tracks lie between 0.4 and 0.9 in terms of danceability. As the danceability increases up until (0.7, 0.8], the number of songs that fall under Alternative Rap, Dark Rap, Electronic, and Pop/R&B increases. As it reaches the highest danceability of 1, no EDM tracks reach this value. For EDM, the greatest danceability is between (0.4, 0.6]. These values make sense, because even though the measure of danceabilility for different musical categories varies, there is always a certain level of danceability for a majority of these tracks. 
+
+### Energy
+```{r }
+spotify %>%
+  dplyr::select(energy, music_category) %>%
+  dplyr::mutate(energy_group = cut(energy, breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = energy_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Energy", y = "Count", title = "Distribution of Energy Across Musical Categories") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+From this bar graph, we can a regular increase in energy of tracks all the way up to 1.0, which is characterized as more fast, loud, and noisy. It makes sense that the most tracks from the genres of EDM and Electronic almost reach the maximum energy of 1.0, because they both heavily rely on electronic instruments and energetic rhythm to encourage dancing. The fewest amount of tracks under Dark Rap and Pop/R&B have a very high energy, because these genres are often more melodic and mellow. They are not usually as high in intensity, so most of their songs have an energy betwen 0.4 and 0.8. 
+
+### Speechiness
+```{r }
+spotify %>%
+  dplyr::select(speechiness, music_category) %>%
+  dplyr::mutate(speechiness_group = cut(speechiness, breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = speechiness_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Speechiness", y = "Count", title = "Distribution of Speechiness Across Musical Categories") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+Over 6250 tracks, which are most of the values, under all of the genres, have a speechiness under 0.1. It dramatically and consistently decreases to almost none after that. This is explained by the fact that speechiness values under 0.33 is music and tracks that do not have much speech. 
+
+### Acousticness
+```{r }
+spotify %>%
+  dplyr::select(acousticness, music_category) %>%
+  dplyr::mutate(acousticness_group = cut(acousticness, breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = acousticness_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Acousticness", y = "Count", title = "Distribution of Acousticness Across Musical Categories") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+Similar to `speechiness`, over 7500 tracks under all the genres have an acousticness of under 0.1. This means that there is low confidence that these tracks are acoustic. This indicates that there is a higher presence of electronic sounds or is just not acoustic.
+
+### Instrumentalness
+```{r }
+spotify %>%
+  dplyr::select(instrumentalness, music_category) %>%
+  dplyr::mutate(instrumentalness_group = cut(instrumentalness, breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = instrumentalness_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Instrumentalness", y = "Count", title = "Distribution of Instrumentalness Across Musical Categories") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+From this bar plot, we can see that over 6250 tracks, which is a majority of the tracks, have an instrumentalness of less than 0.1. This makes sense, because Alternative Rap, Dark Rap, EDM, and Pop/R&B tracks almost always contains vocal content. The only genre that does not follow this pattern is Electronic Music, which has an instrumentalness of almost 1.0. This makes sense, because Electronic Music consists of mostly electronic instruments and contains minimal vocal content. 
+
+### Liveness
+```{r }
+spotify %>%
+  dplyr::select(liveness, music_category) %>%
+  dplyr::mutate(liveness_group = cut(liveness, breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = liveness_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Liveness", y = "Count", title = "Distribution of Liveness Across Musical Categories") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+A majority of these tracks under all genres have a liveness value of under 0.4, with the highest liveness being between 0.1 and 0.2. This makes sense, because a majority of Spotify tracks are prerecorded in a studio. 
+
+### Valence
+```{r }
+spotify %>%
+  dplyr::select(valence, music_category) %>%
+  dplyr::mutate(valence_group = cut(valence, breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = valence_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Valence", y = "Count", title = "Distribution of Valence Across Musical Categories") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+Based on this bar graph, a majority of the tracks under all genres fall between 0 and 0.6, with it almost consistently decreases as the valence increases. The greatest number of tracks are within a valence of 0.1 and 0.2. The same applies for all of the genres, except for Pop/R&B, which increases until (0.5, 0.6] and then slowly decreases as the valence increases. This indicates that a majority of the Spotify tracks under all of the genres except Pop/R&B have somewhat of a lower valence. This makes sense, because these genres of songs are more netural to negative in terms of sound. It makes sense that Pop/R&B have a higher valence, because the music is more upbeat and positive. 
+
+### Tempo
+```{r }
+spotify %>%
+  dplyr::select(tempo, music_category) %>%
+  dplyr::mutate(tempo_group = cut(tempo, breaks = c(100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 250),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = tempo_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Tempo", y = "Count", title = "Distribution of Tempo Across Musical Categories") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+A large portion of the tracks have a tempo of 120 to 160 BPM. For Pop/R&B and Alternative Rap tracks, there are a consistently even amount of tracks with different variations of tempos. The range of BPM for Electronic Music is between 120 to 150 BPM. Of course, it makes sense that Alternative Rap has a wide range of tempos and even extends beyond 250 BPM, because it is rap and uses faster tempos. For EDM tracks, they mostly have a BPM between 140 and 160, as well as 170 to 180.
+
+### Duration
+```{r }
+spotify %>%
+  dplyr::select(duration_ms, music_category) %>%
+  dplyr::mutate(duration_group = cut(duration_ms, breaks = c(100000, 150000, 200000, 250000, 300000, 350000, 400000, 450000, 500000, 550000, 600000),
+                                         include.lowest = TRUE)) %>%
+  ggplot(aes(x = duration_group, fill = music_category)) +
+  geom_bar() +
+  scale_fill_discrete() + 
+  labs(x = "Duration", y = "Count", title = "Distribution of the Duration Across Musical Categories in Milliseconds") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+Based on this bar graph, over 14000 tracks have a duration of less than 250000 milliseconds. The Electronic music genre has a much longer duration, even longer than 600000 milliseconds. EDM, Pop/R&B, and Alternative Rap overall have a shorter duration of less than 350000 milliseconds. 
+
+
+# **Setting Up Models** 
+After doing a deep dive into our data, we can finally start building our models! The first thing we need to do is to use our data to perform a train/test split, build our recipe, and establish cross-validation for our models.
+
+## Train/Test Split
+We first have to randomly split our data into two separate datasets, one for training and one for testing. I chose a 70/30 split for this dataset, so 70% of our data goes towards the training set, while the other 30% goes towards the testing set. We can afford a higher (but not so high) proportion of data to go towards our testing set, because since we have such a high number of observations and our model is more complex, we can afford to allocate a greater proportion for testing, while still retaining a majority of our observations to train our model. We also stratify our response variable, `music_category`. 
+```{r }
+# setting the seed
+set.seed(3435)
+
+# splitting the data 
+spotify_split <- initial_split(spotify, prop = 0.7, strata = "music_category")
+
+# training & testing split 
+spotify_train <- training(spotify_split)
+spotify_test <- testing(spotify_split)
+```
+
+```{r }
+# view the number of columns and rows of our training dataset
+dim(spotify_train)
+
+# view the number of columns and rows of our testing dataset
+dim(spotify_test)
+```
+
+From these dimensions, we can see that the training dataset contains 7639 observations, while the testing dataset contains 3278 observations. As a result, our data was split correctly.
+
+## Recipe Building
+We are now going to create a universal recipe that all of our models will be using. Because we are working with Spotify data, imagine that we are trying to create a customized Spotify playlist. Our recipe would be a set of instructions on how to curate that customized playlist, containsing the steps needed to create that perfect playlist that aligns with your music taste and preferences.
+
+We are only using 15 out of 22 predictor variables, excluding `analysis_url`, `popularity`, `track_href`, `uri`, `id`, and `type`. We also used the existing `music_category` predictor variable, which contained 15 unique values, to create a new predictor variable called `music_category` that combined those values into 5 unique genres. We will also make the variables `mode` and `key` into dummy variables, since they hold categorical values, as well as centering and scaling all of our predictors.
+
+```{r }
+# building our recipe
+spotify_recipe <- 
+  recipe(music_category ~ acousticness + danceability + duration_ms + energy + instrumentalness + key + liveness + loudness + mode + song_name + speechiness + tempo + time_signature + valence, data=spotify_train) %>% 
+  # convert mode to a factor
+  step_mutate(mode = as.factor(mode)) %>%
+  # dummy coding our categorical variables
+  step_dummy(mode) %>%
+  # standardizing our numerical and integer predictors 
+  step_center(acousticness, danceability, duration_ms, energy, instrumentalness,
+                key, liveness, loudness, speechiness, tempo, time_signature, valence) %>%
+  step_scale(acousticness, danceability, duration_ms, energy, instrumentalness,
+               key, liveness, loudness, speechiness, tempo, time_signature, valence)
+```
+
+
+## K-Fold Cross Validation
+We are now going to perform cross validation on our response variable, `music_category`, using 10 folds.
+```{r }
+# 10-fold CV 
+spotify_folds <- vfold_cv(spotify_train, v=10, strata="music_category")
+```
+
+Because the time to build these models is so long, we will save these results to an RDA file. This way, once we finish building our model, we can go back and reload it whenever we want. 
+```{r }
+save(spotify_folds, spotify_recipe, spotify_train, spotify_test, file = "/Users/catherineli/Desktop/Final Project/RDA/Spotify-Model-Setup.rda")
+```
+
+
+# **Model Building**
+Now what we've finally been waiting for: it's time to actually build our models! Because there is a lot of data and takes a long time to run, it cannot be directly ran in this R Markdown file. As a result, each model was ran in a separate R file and these results were loaded below to an RDA file. 
+
+## Performance Metric
+The metric I chose to measure the performance of each model is `roc_auc` because, it is suitable for situations where the data is not perfectly balanced. Although `roc_auc` is typically used for binary classification models, we can adapt it for our multi-class classification model by employing an approach called One-vs-All (OVA).
+
+Typically, in binary classification, `roc_auc` assesses the model's ability to discriminate between positive and negative examples. However, in our multi-class classification scenario, we have multiple genres, and a track can belong to more than one genre. OVA allows us to treat each genre as a positive class and combine all other genres into a negative class. This allows us to evaluate the model's performance in classifying tracks into any genre, without assuming that the genres are mutually exclusive. Therefore, we can effectively evaluate the model's performance across multiple genres.
+
+The ROC curve is created by plotting the true positive rate against the false positive rate for various classification thresholds. In our case, the ROC curve allows us to assess the model's ability to differentiate between tracks belonging one genre, multiple genres, or none at all. The curve represents the trade-off between sensitivity and specificity as we adjust the threshold for classifying a track into a particular genre. 
+
+## Model Building Process
+The overall process for building each model was similar, following these steps below: 
+
+  1. Set up the model by specifying the type of model that it is and then setting its engine and its mode
+      * In our case, we set the mode to 'classification'
+      
+  2. Set up the workflow, add the new model, and add our established recipe
+  
+Skip steps #3-5 for Logistic Regression, Linear Discriminant Analysis (LDA), and Quadratic Discriminant Analysis (QDA)
+
+  3. Set up the tuning grid with the parameters that we want tuned and the different levels of tuning for each parameter
+  
+  4. Tune the model with the parameters of choice
+  
+  5. After all the tuning, select the most accurate model and finalize the workflow with the tuning parameters we used 
+  
+  6. Fit the model with our workflow to the training dataset
+  
+  7. Save our results to an RDA file, so we can easily load it in our main file when needed 
+  
+
+# **Model Results**
+
+```{r }
+load("/Users/catherineli/Desktop/Final Project/RDA/Spotify-Model-Setup.rda")
+```
