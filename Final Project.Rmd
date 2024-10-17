@@ -2,7 +2,7 @@
 title: "Building Dynamic Spotify Playlists through Genre Classification"
 subtitle: "Leveraging Machine Learning and Spotify Data to Classify Tracks into Their Respective Genres Based on its Audio Features"
 author: "Catherine Li"
-date: "UCSB Spring 2023"
+date: "Spring 2023"
 output:
   html_document:
     toc: true 
