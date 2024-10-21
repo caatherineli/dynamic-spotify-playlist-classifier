@@ -6,7 +6,7 @@ This project builds a machine learning model to classify Spotify tracks into one
 *Inspiration and Motivation*\
 Curating the perfect playlist can be overwhelming, given the 80 million+ tracks available on platforms like Spotify. This project aims to streamline that process by automatically classifying tracks based on their audio features, helping users discover and organize music more easily.
 
-*Project Workflow*\
+*Project Workflow*
 1. Data Loading and Preparation\
 Data was sourced from a Kaggle Spotify dataset.
 The dataset contains 15 variables related to audio features of songs.
@@ -25,15 +25,15 @@ We used roc_auc to measure the models' effectiveness, focusing on their ability 
 Random Forest emerged as the top-performing model based on accuracy and classification metrics.
 
 *Results*\
-The final model can accurately classify tracks into either Hip-Hop/Rap or Electronic/Dance based on audio features.
+The final model can accurately classify tracks into either Hip-Hop/Rap or Electronic/Dance based on audio features.\
 Visualizations, including correlation plots and bar plots, highlight the relationships between the audio features and the predicted genre.
 
 *Future Improvements*\
-Extending the classification to additional genres beyond the current two.
-Improving feature engineering and experimenting with additional models.
-Expanding to include user preferences for more personalized playlist creation.
+Extending the classification to additional genres beyond the current two.\
+Improving feature engineering and experimenting with additional models.\
+Expanding to include user preferences for more personalized playlist creation.\
 
 *Technologies Used*\
-R for data analysis and modeling.
-tidymodels framework for building and evaluating machine learning models.
-ggplot2 for data visualization.
+R for data analysis and modeling.\
+tidymodels framework for building and evaluating machine learning models.\
+ggplot2 for data visualization.\
