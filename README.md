@@ -1,6 +1,6 @@
 # Spotify Genre Classification Using Machine Learning
 
-##Introduction
+*Introduction*
 This project builds a machine learning model to classify Spotify tracks into one of two musical genres: Hip-Hop/Rap or Electronic/Dance. Using Spotify audio features data from Kaggle, the goal is to create an accurate and dynamic model to enhance the music listening experience by enabling personalized and automated playlist creation.
 
 Inspiration and Motivation
