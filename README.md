@@ -36,4 +36,4 @@ Expanding to include user preferences for more personalized playlist creation.\
 *Technologies Used*\
 R for data analysis and modeling.\
 tidymodels framework for building and evaluating machine learning models.\
-ggplot2 for data visualization.\
+ggplot2 for data visualization.
